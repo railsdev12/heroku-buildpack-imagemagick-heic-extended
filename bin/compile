@@ -1,0 +1,96 @@
+#!/bin/sh
+
+BUILD_DIR=$1
+CACHE_DIR=$2
+
+INSTALL_DIR="$BUILD_DIR/vendor"
+mkdir -p "$INSTALL_DIR"
+
+export PATH="$INSTALL_DIR/bin:$PATH"
+export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
+export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+export CFLAGS="-fPIC -I$INSTALL_DIR/include"
+export CXXFLAGS="-fPIC -I$INSTALL_DIR/include"
+
+# Install build tools
+echo "[INFO] Installing build tools..."
+apt-get update -qq && apt-get install -y autoconf automake libtool pkg-config cmake ninja-build > /dev/null
+
+# Create temp dir
+TMP_DIR=$(mktemp -d)
+cd "$TMP_DIR"
+
+# Build and install x265
+echo "[INFO] Building x265..."
+curl -sL https://bitbucket.org/multicoreware/x265_git/get/master.tar.gz -o x265.tar.gz
+mkdir x265 && tar -xzf x265.tar.gz -C x265 --strip-components=1
+cd x265/build/linux
+cmake -Wno-dev -DCMAKE_RULE_MESSAGES=OFF \
+      -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+      -DENABLE_SHARED=off \
+      ../../source
+make -s -j4
+make -s install
+
+# Final environment configuration
+export MAGICK_CONFIGURE_PATH="$INSTALL_DIR/etc/ImageMagick-7"
+cd "$TMP_DIR"
+
+# Build and install libde265
+echo "[INFO] Building libde265..."
+curl -sL https://github.com/strukturag/libde265/archive/refs/tags/v1.0.8.tar.gz -o libde265.tar.gz
+mkdir libde265 && tar -xzf libde265.tar.gz -C libde265 --strip-components=1
+cd libde265
+./autogen.sh
+./configure --prefix="$INSTALL_DIR" \
+  --disable-shared --enable-static \
+  --quiet
+make -s -j4 > "$BUILD_DIR/make-libde265.log" 2>&1
+make -s install >> "$BUILD_DIR/make-libde265.log" 2>&1
+
+cd "$TMP_DIR"
+
+# Build and install libheif
+echo "[INFO] Building libheif..."
+curl -sL https://github.com/strukturag/libheif/releases/download/v1.17.6/libheif-1.17.6.tar.gz -o libheif.tar.gz
+mkdir libheif && tar -xzf libheif.tar.gz -C libheif --strip-components=1
+cd libheif
+mkdir build && cd build
+
+cmake .. \
+  -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DWITH_GDK_PIXBUF=OFF \
+  -DWITH_X265=ON \
+  -DWITH_LIBDE265=ON \
+  -DCMAKE_PREFIX_PATH="$INSTALL_DIR"
+
+make -s -j4 > "$BUILD_DIR/make-libheif.log" 2>&1
+make -s install
+cd "$TMP_DIR"
+
+# Confirm libheif.pc exists
+if [ ! -f "$INSTALL_DIR/lib/pkgconfig/libheif.pc" ]; then
+  echo "[ERROR] libheif.pc not found. HEIC support may not be detected."
+  exit 1
+fi
+
+# Build and install ImageMagick
+echo "[INFO] Building ImageMagick with HEIC support..."
+curl -sL https://imagemagick.org/archive/ImageMagick.tar.gz -o ImageMagick.tar.gz
+mkdir imagemagick && tar -xzf ImageMagick.tar.gz -C imagemagick --strip-components=1
+cd imagemagick
+
+export LDFLAGS="-L$INSTALL_DIR/lib -static -lx265 -laom -lde265 -lsharpyuv -lm -ldl -lpthread -Wl,--copy-dt-needed-entries"
+
+./configure \
+  --prefix="$INSTALL_DIR" \
+  --enable-shared \
+  --enable-static \
+  --with-heic=yes \
+  --with-modules \
+  --disable-dependency-tracking
+
+make -s -j4 V=0
+make -s V=0 install
