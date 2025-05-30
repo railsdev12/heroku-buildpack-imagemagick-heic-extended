@@ -82,33 +82,13 @@ curl -sL https://imagemagick.org/archive/ImageMagick.tar.gz -o ImageMagick.tar.g
 mkdir imagemagick && tar -xzf ImageMagick.tar.gz -C imagemagick --strip-components=1
 cd imagemagick
 
-echo "[INFO] Preparing to patch coders/heic.c manually..."
+echo "[INFO] Replacing encoder check in coders/heic.c..."
 
-HEIC_C_PATH="coders/heic.c"
-cp "$HEIC_C_PATH" "$HEIC_C_PATH.orig"
+# Back up original
+cp coders/heic.c coders/heic.c.bak
 
-cat > heic_patch.diff <<'EOF'
---- coders/heic.c.orig
-+++ coders/heic.c
-@@ -1234,7 +1234,13 @@
-     {
--      heif_context_get_encoder_for_format(context, heif_compression_HEVC, &encoder);
-+      struct heif_error err = heif_context_get_encoder_for_format(context, heif_compression_HEVC, &encoder);
-+      fprintf(stderr, "[ImageMagick HEIC] Encoder result: %s (code %d)\n",
-+              heif_get_error_message(err), err.code);
-+      if (err.code != heif_error_Ok)
-+      {
-+        return MagickFalse;
-+      }
-     }
-     
-EOF
-
-echo "[INFO] Applying patch to coders/heic.c..."
-patch "$HEIC_C_PATH" < heic_patch.diff || {
-  echo "[ERROR] Failed to apply patch to coders/heic.c"
-  exit 1
-}
+# Replace the line with a logging version
+sed -i 's|heif_context_get_encoder_for_format([^)]*);|struct heif_error err = heif_context_get_encoder_for_format(context, heif_compression_HEVC, \&encoder);\n      fprintf(stderr, "[ImageMagick HEIC] Encoder result: %s (code %d)\\n", heif_get_error_message(err), err.code);\n      if (err.code != heif_error_Ok) {\n        return MagickFalse;\n      }|' coders/heic.c
 
 export LDFLAGS="-L$INSTALL_DIR/lib -static -lx265 -laom -lde265 -lsharpyuv -lm -ldl -lpthread -Wl,--copy-dt-needed-entries"
 
