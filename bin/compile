@@ -101,6 +101,7 @@ cat > heic_patch.diff <<'EOF'
 +        return MagickFalse;
 +      }
      }
+     
 EOF
 
 echo "[INFO] Applying patch to coders/heic.c..."
