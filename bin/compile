@@ -82,17 +82,10 @@ curl -sL https://imagemagick.org/archive/ImageMagick.tar.gz -o ImageMagick.tar.g
 mkdir imagemagick && tar -xzf ImageMagick.tar.gz -C imagemagick --strip-components=1
 cd imagemagick
 
-echo "[INFO] Patching coders/heic.c manually..."
-
-echo "[INFO] Patching coders/heic.c to log encoder availability..."
+echo "[INFO] Preparing to patch coders/heic.c manually..."
 
 HEIC_C_PATH="coders/heic.c"
-
-# Back up the original file just in case
-cp "$HEIC_C_PATH" "$HEIC_C_PATH.bak"
-
-# Replace call to heif_context_get_encoder_for_format() with a logged version
-echo "[INFO] Patching coders/heic.c with logging for encoder check..."
+cp "$HEIC_C_PATH" "$HEIC_C_PATH.orig"
 
 cat > heic_patch.diff <<'EOF'
 --- coders/heic.c.orig
@@ -110,8 +103,11 @@ cat > heic_patch.diff <<'EOF'
      }
 EOF
 
-cp coders/heic.c coders/heic.c.orig
-patch coders/heic.c < heic_patch.diff
+echo "[INFO] Applying patch to coders/heic.c..."
+patch "$HEIC_C_PATH" < heic_patch.diff || {
+  echo "[ERROR] Failed to apply patch to coders/heic.c"
+  exit 1
+}
 
 export LDFLAGS="-L$INSTALL_DIR/lib -static -lx265 -laom -lde265 -lsharpyuv -lm -ldl -lpthread -Wl,--copy-dt-needed-entries"
 
