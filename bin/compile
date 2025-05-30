@@ -81,6 +81,15 @@ echo "[INFO] Building ImageMagick with HEIC support..."
 curl -sL https://imagemagick.org/archive/ImageMagick.tar.gz -o ImageMagick.tar.gz
 mkdir imagemagick && tar -xzf ImageMagick.tar.gz -C imagemagick --strip-components=1
 cd imagemagick
+echo "[INFO] Patching coders/heic.c to log encoder availability..."
+
+HEIC_C_PATH="coders/heic.c"
+
+# Back up the original file just in case
+cp "$HEIC_C_PATH" "$HEIC_C_PATH.bak"
+
+# Replace call to heif_context_get_encoder_for_format() with a logged version
+sed -i 's/\(heif_context_get_encoder_for_format([^;]*\);[[:space:]]*\)/struct heif_error err = \1\n  fprintf(stderr, "\\n[ImageMagick HEIC] Encoder result: %%s (code %%d)\\n", heif_get_error_message(err), err.code);/' "$HEIC_C_PATH"
 
 export LDFLAGS="-L$INSTALL_DIR/lib -static -lx265 -laom -lde265 -lsharpyuv -lm -ldl -lpthread -Wl,--copy-dt-needed-entries"
 
