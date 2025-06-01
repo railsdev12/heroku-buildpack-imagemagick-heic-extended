@@ -14,7 +14,7 @@ export CXXFLAGS="-fPIC -I$INSTALL_DIR/include"
 
 # Install build tools
 echo "[INFO] Installing build tools..."
-apt-get update -qq && apt-get install -y autoconf automake libtool pkg-config cmake ninja-build > /dev/null
+apt-get update -qq && apt-get install -y libjpeg-dev autoconf automake libtool pkg-config cmake ninja-build > /dev/null
 
 # Create temp dir
 TMP_DIR=$(mktemp -d)
@@ -96,6 +96,7 @@ export LDFLAGS="-L$INSTALL_DIR/lib -static -lx265 -laom -lde265 -lsharpyuv -lm -
   --prefix="$INSTALL_DIR" \
   --enable-shared \
   --enable-static \
+  --with-jpeg=yes \
   --with-heic=yes \
   --with-modules \
   --disable-dependency-tracking
