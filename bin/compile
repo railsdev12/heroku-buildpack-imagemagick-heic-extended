@@ -38,7 +38,7 @@ cd "$TMP_DIR"
 
 # Build and install libde265
 echo "[INFO] Building libde265..."
-curl -sL https://github.com/strukturag/libde265/archive/refs/tags/v1.0.8.tar.gz -o libde265.tar.gz
+curl -sL https://github.com/strukturag/libde265/releases/download/v1.0.16/libde265-1.0.16.tar.gz -o libde265.tar.gz
 mkdir libde265 && tar -xzf libde265.tar.gz -C libde265 --strip-components=1
 cd libde265
 ./autogen.sh
@@ -52,7 +52,7 @@ cd "$TMP_DIR"
 
 # Build and install libheif
 echo "[INFO] Building libheif..."
-curl -sL https://github.com/strukturag/libheif/releases/download/v1.17.6/libheif-1.17.6.tar.gz -o libheif.tar.gz
+curl -sL https://github.com/strukturag/libheif/releases/download/v1.19.8/libheif-1.19.8.tar.gz -o libheif.tar.gz
 mkdir libheif && tar -xzf libheif.tar.gz -C libheif --strip-components=1
 cd libheif
 mkdir build && cd build
