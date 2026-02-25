@@ -110,5 +110,4 @@ export MAGICK_CONFIGURE_PATH="$HOME/vendor/etc/ImageMagick-7"
 export PKG_CONFIG_PATH="$HOME/vendor/lib/pkgconfig:${PKG_CONFIG_PATH}"
 EOF
 
-find "$INSTALL_DIR" \( -name '*heic*so*' -o -name '*heif*so*' \) 2>/dev/null | head -n 20 || true
 "$INSTALL_DIR/bin/magick" -debug configure -list format 2>&1 | grep -i heic || true
