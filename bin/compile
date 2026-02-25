@@ -18,18 +18,6 @@ apt-get update -qq && apt-get install -y autoconf automake libtool pkg-config cm
 TMP_DIR=$(mktemp -d)
 cd "$TMP_DIR"
 
-# Build and install x265
-echo "[INFO] Building x265..."
-curl -sL https://bitbucket.org/multicoreware/x265_git/get/master.tar.gz -o x265.tar.gz
-mkdir x265 && tar -xzf x265.tar.gz -C x265 --strip-components=1
-cd x265/build/linux
-cmake -Wno-dev -DCMAKE_RULE_MESSAGES=OFF \
-      -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
-      -DENABLE_SHARED=off \
-      ../../source
-make -s -j4
-make -s install
-
 # Final environment configuration
 export MAGICK_CONFIGURE_PATH="$INSTALL_DIR/etc/ImageMagick-7"
 cd "$TMP_DIR"
