@@ -1,5 +1,7 @@
 #!/bin/sh
 
+set -euo pipefail
+
 BUILD_DIR=$1
 CACHE_DIR=$2
 
@@ -12,7 +14,15 @@ export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 # Install build tools
 echo "[INFO] Installing build tools..."
-apt-get update -qq && apt-get install -y autoconf automake libtool pkg-config cmake ninja-build > /dev/null
+apt-get update -qq
+apt-get install -y --no-install-recommends \
+  build-essential \
+  ca-certificates \
+  curl \
+  pkg-config \
+  autoconf automake libtool \
+  cmake ninja-build \
+  > /dev/null
 
 # Create temp dir
 TMP_DIR=$(mktemp -d)
@@ -20,7 +30,6 @@ cd "$TMP_DIR"
 
 # Final environment configuration
 export MAGICK_CONFIGURE_PATH="$INSTALL_DIR/etc/ImageMagick-7"
-cd "$TMP_DIR"
 
 # Build and install libde265
 echo "[INFO] Building libde265..."
@@ -28,13 +37,13 @@ curl -sL https://github.com/strukturag/libde265/archive/refs/tags/v1.0.8.tar.gz 
 mkdir libde265 && tar -xzf libde265.tar.gz -C libde265 --strip-components=1
 cd libde265
 ./autogen.sh
-export CFLAGS="-fPIC"
-export CXXFLAGS="-fPIC"
 ./configure --prefix="$INSTALL_DIR" \
   --disable-shared --enable-static \
   --quiet
 make -s -j4 > "$BUILD_DIR/make-libde265.log" 2>&1
 make -s install >> "$BUILD_DIR/make-libde265.log" 2>&1
+unset CFLAGS || true
+unset CXXFLAGS || true
 
 cd "$TMP_DIR"
 
@@ -50,6 +59,8 @@ cmake -Wno-dev -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
       -DCMAKE_BUILD_TYPE=Release \
       -DWITH_GDK_PIXBUF=OFF \
       -DCMAKE_PREFIX_PATH="$INSTALL_DIR" \
+      -DWITH_LIBDE265=ON \
+      -DENABLE_PLUGIN_LOADING=OFF \
       .. > "$BUILD_DIR/cmake-libheif.log" 2>&1
 
 make -s -j4 > "$BUILD_DIR/make-libheif.log" 2>&1
@@ -67,14 +78,37 @@ echo "[INFO] Building ImageMagick with HEIC support..."
 curl -sL https://imagemagick.org/archive/ImageMagick.tar.gz -o ImageMagick.tar.gz
 mkdir imagemagick && tar -xzf ImageMagick.tar.gz -C imagemagick --strip-components=1
 cd imagemagick
+
+export CFLAGS="-I$INSTALL_DIR/include"
+export LDFLAGS="-L$INSTALL_DIR/lib"
+export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:$PKG_CONFIG_PATH"
+
 ./configure \
   --prefix="$INSTALL_DIR" \
   --enable-shared \
-  --enable-static \
+  --disable-static \
   --with-heic=yes \
-  PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig" \
-  CFLAGS="-I$INSTALL_DIR/include" \
-  LDFLAGS="-L$INSTALL_DIR/lib -lx265 -laom -lde265 -lsharpyuv -lm -ldl -lpthread -Wl,--copy-dt-needed-entries"
+  > "$BUILD_DIR/configure-imagemagick.log" 2>&1 || {
+    echo "[ERROR] ImageMagick configure failed. Showing tail of config log:"
+    tail -n 200 "$BUILD_DIR/configure-imagemagick.log" || true
+    exit 1
+  }
 
-make -s -j4 V=0
-make -s V=0 install
+make -s -j4 > "$BUILD_DIR/make-imagemagick.log" 2>&1
+make -s install >> "$BUILD_DIR/make-imagemagick.log" 2>&1
+
+echo "[INFO] Verifying ImageMagick links..."
+"$INSTALL_DIR/bin/magick" -version || true
+ldd "$INSTALL_DIR/bin/magick" | grep -E "libheif|libde265" || true
+"$INSTALL_DIR/bin/magick" -list format | grep -i heic || true
+
+mkdir -p "$BUILD_DIR/.profile.d"
+cat > "$BUILD_DIR/.profile.d/imagemagick.sh" <<'EOF'
+export PATH="$HOME/vendor/bin:$PATH"
+export LD_LIBRARY_PATH="$HOME/vendor/lib:${LD_LIBRARY_PATH}"
+export MAGICK_CONFIGURE_PATH="$HOME/vendor/etc/ImageMagick-7"
+export PKG_CONFIG_PATH="$HOME/vendor/lib/pkgconfig:${PKG_CONFIG_PATH}"
+EOF
+
+find "$INSTALL_DIR" -name '*heic*so*' -o -name '*heif*so*' 2>/dev/null | head -n 20 || true
+"$INSTALL_DIR/bin/magick" -debug configure -list format 2>&1 | grep -i heic || true
