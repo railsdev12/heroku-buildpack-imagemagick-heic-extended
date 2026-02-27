@@ -1,130 +1,234 @@
 #!/bin/sh
 
+set -u
+
 BUILD_DIR=$1
 CACHE_DIR=$2
 
 INSTALL_DIR="$BUILD_DIR/vendor"
-mkdir -p "$INSTALL_DIR"
+
+LIBDE265_VERSION=1.0.8
+LIBHEIF_VERSION=1.18.0
+IMAGEMAGICK_VERSION=7.1.2-15
+CACHE_KEY="im-${IMAGEMAGICK_VERSION}_heif-${LIBHEIF_VERSION}_de265-${LIBDE265_VERSION}"
+CACHE_VENDOR_DIR="$CACHE_DIR/vendor-$CACHE_KEY"
+JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
+
+mkdir -p "$INSTALL_DIR" "$CACHE_DIR"
 
 export PATH="$INSTALL_DIR/bin:$PATH"
 export LD_LIBRARY_PATH="$INSTALL_DIR/lib:${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-
-# Install build tools
-echo "[INFO] Installing build tools..."
-apt-get update -qq
-apt-get install -y --no-install-recommends \
-  build-essential \
-  ca-certificates \
-  curl \
-  pkg-config \
-  autoconf automake libtool \
-  cmake ninja-build \
-  > /dev/null
-
-# Create temp dir
-TMP_DIR=$(mktemp -d)
-cd "$TMP_DIR"
-
-# Final environment configuration
 export MAGICK_CONFIGURE_PATH="$INSTALL_DIR/etc/ImageMagick-7"
 
-########################################
-# libde265 (HEVC decoder)
-#
-# Your build failed because libheif is building a shared library (libheif.so)
-# and it attempted to link in a non-PIC static libde265.a.
-#
-# Fix: build libde265 as a shared library (or build static with -fPIC).
-# Shared is simplest and avoids the relocation error.
-########################################
+optional_step() {
+  "$@" || {
+    echo "[WARN] Optional step failed (continuing): $*"
+    return 0
+  }
+}
 
-echo "[INFO] Building libde265..."
-LIBDE265_VERSION=1.0.8
-curl -sL "https://github.com/strukturag/libde265/archive/refs/tags/v${LIBDE265_VERSION}.tar.gz" -o libde265.tar.gz
-mkdir libde265 && tar -xzf libde265.tar.gz -C libde265 --strip-components=1
-cd libde265
-./autogen.sh
+if [ -x "$CACHE_VENDOR_DIR/bin/magick" ]; then
+  echo "[INFO] Restoring cached ImageMagick build: $CACHE_KEY"
+  rm -rf "$INSTALL_DIR"
+  mkdir -p "$INSTALL_DIR"
+  cp -a "$CACHE_VENDOR_DIR/." "$INSTALL_DIR/" || {
+    echo "[ERROR] Failed to restore cached vendor directory."
+    exit 1
+  }
+else
+  TMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+  cd "$TMP_DIR" || exit 1
 
-# Build shared libde265.so (preferred)
-export CFLAGS="-fPIC"
-export CXXFLAGS="-fPIC"
-./configure --prefix="$INSTALL_DIR" \
-  --enable-shared --disable-static \
-  --quiet
-make -s -j4 > "$BUILD_DIR/make-libde265.log" 2>&1
-make -s install >> "$BUILD_DIR/make-libde265.log" 2>&1
+  ########################################
+  # libde265 (HEVC decoder)
+  ########################################
 
-# Reset flags so they do not leak into the next builds
-unset CFLAGS || true
-unset CXXFLAGS || true
-
-cd "$TMP_DIR"
-
-########################################
-# libheif (HEIF container)
-########################################
-
-echo "[INFO] Building libheif..."
-LIBHEIF_VERSION=1.18.0
-curl -sL "https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz" -o libheif.tar.gz
-mkdir libheif && tar -xzf libheif.tar.gz -C libheif --strip-components=1
-cd libheif
-mkdir build && cd build
-
-cmake -Wno-dev \
-  -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="$INSTALL_DIR" \
-  -DWITH_GDK_PIXBUF=OFF \
-  -DWITH_LIBDE265=ON \
-  -DENABLE_PLUGIN_LOADING=OFF \
-  .. > "$BUILD_DIR/cmake-libheif.log" 2>&1
-
-make -s -j4 > "$BUILD_DIR/make-libheif.log" 2>&1
-make -s install >> "$BUILD_DIR/make-libheif.log" 2>&1
-
-cd "$TMP_DIR"
-
-# Confirm libheif.pc exists
-if [ ! -f "$INSTALL_DIR/lib/pkgconfig/libheif.pc" ]; then
-  echo "[ERROR] libheif.pc not found. HEIC support may not be detected."
-  exit 1
-fi
-
-########################################
-# ImageMagick
-########################################
-
-echo "[INFO] Building ImageMagick with HEIC support..."
-curl -sL https://imagemagick.org/archive/ImageMagick.tar.gz -o ImageMagick.tar.gz
-mkdir imagemagick && tar -xzf ImageMagick.tar.gz -C imagemagick --strip-components=1
-cd imagemagick
-
-export CFLAGS="-I$INSTALL_DIR/include"
-export LDFLAGS="-L$INSTALL_DIR/lib"
-export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-
-./configure \
-  --prefix="$INSTALL_DIR" \
-  --enable-shared \
-  --disable-static \
-  --with-heic=yes \
-  > "$BUILD_DIR/configure-imagemagick.log" 2>&1 || {
-    echo "[ERROR] ImageMagick configure failed. Showing tail of config log:"
-    tail -n 200 "$BUILD_DIR/configure-imagemagick.log" || true
+  echo "[INFO] Building libde265..."
+  curl -fsSL "https://github.com/strukturag/libde265/archive/refs/tags/v${LIBDE265_VERSION}.tar.gz" -o libde265.tar.gz || {
+    echo "[ERROR] Failed to download libde265."
+    exit 1
+  }
+  mkdir libde265 && tar -xzf libde265.tar.gz -C libde265 --strip-components=1 || {
+    echo "[ERROR] Failed to unpack libde265."
+    exit 1
+  }
+  cd libde265 || exit 1
+  ./autogen.sh > "$BUILD_DIR/autogen-libde265.log" 2>&1 || {
+    echo "[ERROR] libde265 autogen failed."
+    tail -n 200 "$BUILD_DIR/autogen-libde265.log" || true
     exit 1
   }
 
-make -s -j4 > "$BUILD_DIR/make-imagemagick.log" 2>&1
-make -s install >> "$BUILD_DIR/make-imagemagick.log" 2>&1
+  export CFLAGS="-fPIC"
+  export CXXFLAGS="-fPIC"
+  ./configure --prefix="$INSTALL_DIR" \
+    --enable-shared --disable-static \
+    --quiet > "$BUILD_DIR/configure-libde265.log" 2>&1 || {
+      echo "[ERROR] libde265 configure failed."
+      tail -n 200 "$BUILD_DIR/configure-libde265.log" || true
+      exit 1
+    }
+  make -s -j"$JOBS" > "$BUILD_DIR/make-libde265.log" 2>&1 || {
+    echo "[ERROR] libde265 build failed."
+    tail -n 200 "$BUILD_DIR/make-libde265.log" || true
+    exit 1
+  }
+  make -s install >> "$BUILD_DIR/make-libde265.log" 2>&1 || {
+    echo "[ERROR] libde265 install failed."
+    tail -n 200 "$BUILD_DIR/make-libde265.log" || true
+    exit 1
+  }
+
+  unset CFLAGS || true
+  unset CXXFLAGS || true
+
+  cd "$TMP_DIR" || exit 1
+
+  ########################################
+  # libheif (HEIF container)
+  ########################################
+
+  echo "[INFO] Building libheif..."
+  curl -fsSL "https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz" -o libheif.tar.gz || {
+    echo "[ERROR] Failed to download libheif."
+    exit 1
+  }
+  mkdir libheif && tar -xzf libheif.tar.gz -C libheif --strip-components=1 || {
+    echo "[ERROR] Failed to unpack libheif."
+    exit 1
+  }
+  cd libheif || exit 1
+  mkdir build && cd build || exit 1
+
+  cmake -Wno-dev \
+    -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="$INSTALL_DIR" \
+    -DBUILD_SHARED_LIBS=ON \
+    -DBUILD_TESTING=OFF \
+    -DWITH_EXAMPLES=OFF \
+    -DWITH_GDK_PIXBUF=OFF \
+    -DWITH_LIBDE265=ON \
+    -DWITH_X265=OFF \
+    -DWITH_DAV1D=OFF \
+    -DWITH_AOM_DECODER=OFF \
+    -DWITH_AOM_ENCODER=OFF \
+    -DWITH_RAV1E=OFF \
+    -DWITH_SvtEnc=OFF \
+    -DENABLE_PLUGIN_LOADING=OFF \
+    .. > "$BUILD_DIR/cmake-libheif.log" 2>&1 || {
+      echo "[ERROR] libheif cmake configure failed."
+      tail -n 200 "$BUILD_DIR/cmake-libheif.log" || true
+      exit 1
+    }
+
+  make -s -j"$JOBS" > "$BUILD_DIR/make-libheif.log" 2>&1 || {
+    echo "[ERROR] libheif build failed."
+    tail -n 200 "$BUILD_DIR/make-libheif.log" || true
+    exit 1
+  }
+  make -s install >> "$BUILD_DIR/make-libheif.log" 2>&1 || {
+    echo "[ERROR] libheif install failed."
+    tail -n 200 "$BUILD_DIR/make-libheif.log" || true
+    exit 1
+  }
+
+  if [ ! -f "$INSTALL_DIR/lib/pkgconfig/libheif.pc" ]; then
+    echo "[ERROR] libheif.pc not found. HEIC support may not be detected."
+    exit 1
+  fi
+
+  cd "$TMP_DIR" || exit 1
+
+  ########################################
+  # ImageMagick
+  ########################################
+
+  echo "[INFO] Building ImageMagick with HEIC support..."
+  curl -fsSL "https://imagemagick.org/archive/releases/ImageMagick-${IMAGEMAGICK_VERSION}.tar.gz" -o ImageMagick.tar.gz || {
+    echo "[ERROR] Failed to download ImageMagick ${IMAGEMAGICK_VERSION}."
+    exit 1
+  }
+  mkdir imagemagick && tar -xzf ImageMagick.tar.gz -C imagemagick --strip-components=1 || {
+    echo "[ERROR] Failed to unpack ImageMagick."
+    exit 1
+  }
+  cd imagemagick || exit 1
+
+  export CFLAGS="-I$INSTALL_DIR/include"
+  export LDFLAGS="-L$INSTALL_DIR/lib"
+  export PKG_CONFIG_PATH="$INSTALL_DIR/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+  ./configure \
+    --prefix="$INSTALL_DIR" \
+    --enable-shared \
+    --disable-static \
+    --with-heic=yes \
+    --without-perl \
+    --without-magick-plus-plus \
+    --without-x \
+    --disable-openmp \
+    --disable-opencl \
+    > "$BUILD_DIR/configure-imagemagick.log" 2>&1 || {
+      echo "[ERROR] ImageMagick configure failed."
+      tail -n 200 "$BUILD_DIR/configure-imagemagick.log" || true
+      exit 1
+    }
+
+  make -s -j"$JOBS" > "$BUILD_DIR/make-imagemagick.log" 2>&1 || {
+    echo "[ERROR] ImageMagick build failed."
+    tail -n 200 "$BUILD_DIR/make-imagemagick.log" || true
+    exit 1
+  }
+  make -s install >> "$BUILD_DIR/make-imagemagick.log" 2>&1 || {
+    echo "[ERROR] ImageMagick install failed."
+    tail -n 200 "$BUILD_DIR/make-imagemagick.log" || true
+    exit 1
+  }
+
+  ########################################
+  # Prune runtime payload
+  ########################################
+
+  echo "[INFO] Pruning non-runtime build artifacts..."
+  rm -rf \
+    "$INSTALL_DIR/include" \
+    "$INSTALL_DIR/share/doc" \
+    "$INSTALL_DIR/share/man" \
+    "$INSTALL_DIR/share/info" \
+    "$INSTALL_DIR/share/pkgconfig" \
+    "$INSTALL_DIR/lib/pkgconfig" \
+    "$INSTALL_DIR/lib/cmake"
+
+  find "$INSTALL_DIR/lib" -type f \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
+
+  if command -v strip >/dev/null 2>&1; then
+    optional_step find "$INSTALL_DIR/bin" "$INSTALL_DIR/lib" -type f \
+      \( -perm -111 -o -name '*.so' -o -name '*.so.*' \) \
+      -exec strip --strip-unneeded {} + 2>/dev/null
+  fi
+
+  ########################################
+  # Cache artifacts for future builds
+  ########################################
+
+  echo "[INFO] Caching compiled artifacts..."
+  rm -rf "$CACHE_DIR"/vendor-* 2>/dev/null || true
+  mkdir -p "$CACHE_VENDOR_DIR"
+  cp -a "$INSTALL_DIR/." "$CACHE_VENDOR_DIR/" || {
+    echo "[ERROR] Failed to cache vendor directory."
+    exit 1
+  }
+fi
 
 ########################################
-# Verify during build
+# Verify during build (optional)
 ########################################
 
 echo "[INFO] Verifying ImageMagick HEIC support..."
-"$INSTALL_DIR/bin/magick" -version || true
+optional_step "$INSTALL_DIR/bin/magick" -version
 "$INSTALL_DIR/bin/magick" -list format | grep -i heic || true
 ldd "$INSTALL_DIR/bin/magick" | grep -E "libheif|libde265" || true
 
@@ -137,8 +241,14 @@ cat > "$BUILD_DIR/.profile.d/imagemagick.sh" <<'EOF'
 export PATH="$HOME/vendor/bin:$PATH"
 export LD_LIBRARY_PATH="$HOME/vendor/lib:${LD_LIBRARY_PATH}"
 export MAGICK_CONFIGURE_PATH="$HOME/vendor/etc/ImageMagick-7"
-export PKG_CONFIG_PATH="$HOME/vendor/lib/pkgconfig:${PKG_CONFIG_PATH}"
 EOF
 
-# Optional debug signal
-"$INSTALL_DIR/bin/magick" -debug configure -list format 2>&1 | grep -i heic || true
+echo "[INFO] Cleaning build logs from slug payload..."
+rm -f \
+  "$BUILD_DIR/autogen-libde265.log" \
+  "$BUILD_DIR/configure-libde265.log" \
+  "$BUILD_DIR/make-libde265.log" \
+  "$BUILD_DIR/cmake-libheif.log" \
+  "$BUILD_DIR/make-libheif.log" \
+  "$BUILD_DIR/configure-imagemagick.log" \
+  "$BUILD_DIR/make-imagemagick.log"
